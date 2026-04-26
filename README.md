@@ -1,5 +1,9 @@
 # Rat.it
 
+<p align="center">
+  <img src="assets/ratit-logo.png" alt="Rat.it logo" width="280">
+</p>
+
 Мой лично написанный терминальный текстовый редактор на плюсах. Он в честь моей крыски, и в нем она есть как маленький терминальный спутник.
 
 Rat.it не такой сложный как vim: по ощущениям ближе к nano, только современней и с собственным характером.
@@ -34,6 +38,12 @@ g++ -std=c++17 -O2 -Wall -Wextra main.cpp -lncursesw -o ratit
 ```sh
 sudo make install
 ```
+
+### Визуальный гайд
+
+<p align="center">
+  <img src="assets/install-guide.png" alt="Rat.it installation and compilation guide" width="760">
+</p>
 
 ## Использование
 

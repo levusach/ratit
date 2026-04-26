@@ -1,6 +1,6 @@
 ratit
+ROADMAP_FOR_AGENTS.md
 *.o
 *.pkg.tar.*
 pkg/
 src/
-

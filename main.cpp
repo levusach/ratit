@@ -141,6 +141,23 @@ void blockingInput() {
     timeout(-1);
 }
 
+struct InputModeGuard {
+    int cursor;
+    bool liveOnExit;
+
+    InputModeGuard(int cursorMode, bool restoreLive = true)
+        : cursor(cursorMode), liveOnExit(restoreLive) {
+        curs_set(cursor);
+        blockingInput();
+    }
+
+    ~InputModeGuard() {
+        curs_set(1);
+        if (liveOnExit)
+            liveInput();
+    }
+};
+
 EditorState captureState() {
     return {lines, cx, cy, rowoff, coloff, dirty};
 }
@@ -213,11 +230,14 @@ void initCurses() {
     if (cursesStarted) return;
 
     initscr();
+    set_escdelay(25);
     raw();
     noecho();
     keypad(stdscr, true);
     timeout(liveInputDelayMs);
     curs_set(1);
+    mouseinterval(0);
+    mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, nullptr);
 
     start_color();
     use_default_colors();
@@ -300,8 +320,7 @@ std::wstring prompt(const std::wstring& label) {
 
     std::wstring input;
 
-    curs_set(1);
-    blockingInput();
+    InputModeGuard inputGuard(1);
 
     while (true) {
         attron(COLOR_PAIR(C_STATUS));
@@ -321,17 +340,17 @@ std::wstring prompt(const std::wstring& label) {
         if (result == KEY_CODE_YES) {
             if (ch == KEY_BACKSPACE && !input.empty()) {
                 input.pop_back();
+            } else if (ch == KEY_DC && !input.empty()) {
+                input.pop_back();
             }
             continue;
         }
 
-        if (ch == 27) {
-            liveInput();
+        if (ch == 27 || ch == 3) {
             return L"";
         }
 
         if (ch == L'\n' || ch == L'\r') {
-            liveInput();
             return input;
         }
 
@@ -381,8 +400,7 @@ std::string filePicker() {
     int selected = 0;
     int offset = 0;
 
-    curs_set(0);
-    blockingInput();
+    InputModeGuard inputGuard(0);
 
     while (true) {
         auto items = listFiles(current);
@@ -429,6 +447,33 @@ std::string filePicker() {
         if (result == ERR) continue;
 
         if (result == KEY_CODE_YES) {
+            if (ch == KEY_MOUSE) {
+                MEVENT event;
+                if (getmouse(&event) == OK &&
+                    (event.bstate & (BUTTON1_CLICKED | BUTTON1_DOUBLE_CLICKED | BUTTON1_PRESSED))) {
+                    int clicked = offset + event.y - listY;
+                    if (clicked >= 0 && clicked < (int)items.size())
+                        selected = clicked;
+
+                    if (event.bstate & BUTTON1_DOUBLE_CLICKED) {
+                        fs::path picked = current / items[selected];
+                        if (items[selected] == "../") {
+                            current = current.parent_path();
+                            selected = 0;
+                            offset = 0;
+                        } else if (!items[selected].empty() && items[selected].back() == '/') {
+                            current = picked;
+                            selected = 0;
+                            offset = 0;
+                        } else {
+                            return picked.string();
+                        }
+                    } else {
+                        continue;
+                    }
+                }
+            }
+
             if (ch == KEY_UP) selected--;
             else if (ch == KEY_DOWN) selected++;
             else if (ch == KEY_NPAGE) selected += listH;
@@ -438,16 +483,12 @@ std::string filePicker() {
         }
 
         if (ch == 27) {
-            curs_set(1);
-            liveInput();
             return "";
         }
 
         if (ch == L'n' || ch == L'N') {
             std::wstring input = prompt(L"New/open path: ");
             if (!input.empty()) {
-                curs_set(1);
-                liveInput();
                 return toUtf8(input);
             }
 
@@ -467,8 +508,6 @@ std::string filePicker() {
                 selected = 0;
                 offset = 0;
             } else {
-                curs_set(1);
-                liveInput();
                 return picked.string();
             }
         }
@@ -479,8 +518,7 @@ std::string startMenu() {
     int selected = 0;
     std::vector<std::wstring> options = {L"Open file", L"Exit"};
 
-    curs_set(0);
-    blockingInput();
+    InputModeGuard inputGuard(0);
 
     while (true) {
         erase();
@@ -516,30 +554,41 @@ std::string startMenu() {
         if (result == ERR) continue;
 
         if (result == KEY_CODE_YES) {
+            if (ch == KEY_MOUSE) {
+                MEVENT event;
+                if (getmouse(&event) == OK &&
+                    (event.bstate & (BUTTON1_CLICKED | BUTTON1_DOUBLE_CLICKED | BUTTON1_PRESSED))) {
+                    for (int i = 0; i < (int)options.size(); ++i) {
+                        if (event.y == logoY + 7 + i * 2) {
+                            selected = i;
+                            if (event.bstate & (BUTTON1_CLICKED | BUTTON1_DOUBLE_CLICKED))
+                                ch = L'\n';
+                            break;
+                        }
+                    }
+                }
+            }
+
             if (ch == KEY_UP)
                 selected = (selected + (int)options.size() - 1) % (int)options.size();
             else if (ch == KEY_DOWN)
                 selected = (selected + 1) % (int)options.size();
-            continue;
+
+            if (ch != L'\n' && ch != L'\r')
+                continue;
         }
 
         if (ch == L'q' || ch == L'Q' || ch == 27) {
-            liveInput();
-            curs_set(1);
             return "";
         }
 
         if (ch == L'\n' || ch == L'\r') {
             if (selected == 1) {
-                liveInput();
-                curs_set(1);
                 return "";
             }
 
             std::string picked = filePicker();
             if (!picked.empty()) {
-                liveInput();
-                curs_set(1);
                 return picked;
             }
 
@@ -1122,6 +1171,44 @@ void pageDown() {
     cx = std::min(cx, (int)lines[cy].size());
 }
 
+void moveToScreenPoint(int screenY, int screenX) {
+    int h, w;
+    getmaxyx(stdscr, h, w);
+    (void)w;
+
+    int textHeight = std::max(1, h - 4);
+    if (screenY < 1 || screenY > textHeight || screenX < editorLeft)
+        return;
+
+    int targetLine = rowoff + screenY - 1;
+    if (targetLine < 0 || targetLine >= (int)lines.size())
+        return;
+
+    cy = targetLine;
+    cx = std::clamp(coloff + screenX - editorLeft, 0, (int)lines[cy].size());
+    clearSelection();
+}
+
+void handleMouse() {
+    MEVENT event;
+    if (getmouse(&event) != OK) return;
+
+    if (event.bstate & BUTTON4_PRESSED) {
+        if (cy > 0) moveUp();
+        return;
+    }
+
+    if (event.bstate & BUTTON5_PRESSED) {
+        if (cy + 1 < (int)lines.size()) moveDown();
+        return;
+    }
+
+    if (event.bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED | BUTTON1_DOUBLE_CLICKED)) {
+        moveToScreenPoint(event.y, event.x);
+        setStatus(L"cursor moved");
+    }
+}
+
 void showHelp() {
     std::vector<std::wstring> help = {
         L"Navigation",
@@ -1155,8 +1242,7 @@ void showHelp() {
         L"  Esc close this help"
     };
 
-    blockingInput();
-    curs_set(0);
+    InputModeGuard inputGuard(0);
 
     int scroll = 0;
 
@@ -1196,7 +1282,20 @@ void showHelp() {
         if (result == ERR) continue;
 
         if (result == KEY_CODE_YES) {
-            if (ch == KEY_UP) scroll--;
+            if (ch == KEY_MOUSE) {
+                MEVENT event;
+                if (getmouse(&event) == OK) {
+                    if (event.bstate & BUTTON4_PRESSED) scroll--;
+                    else if (event.bstate & BUTTON5_PRESSED) scroll++;
+                    else if (event.bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED)) {
+                        if (event.y <= y || event.y >= y + boxH - 1 ||
+                            event.x <= x || event.x >= x + boxW - 1) {
+                            setStatus(L"help closed");
+                            return;
+                        }
+                    }
+                }
+            } else if (ch == KEY_UP) scroll--;
             else if (ch == KEY_DOWN) scroll++;
             else if (ch == KEY_PPAGE) scroll -= bodyH;
             else if (ch == KEY_NPAGE) scroll += bodyH;
@@ -1204,8 +1303,6 @@ void showHelp() {
         }
 
         if (ch == 27 || ch == L'q' || ch == L'Q' || ch == L'\n' || ch == L'\r') {
-            curs_set(1);
-            liveInput();
             setStatus(L"help closed");
             return;
         }
@@ -1222,7 +1319,7 @@ bool confirmQuit() {
     int y = std::max(1, (h - boxH) / 2);
     int x = std::max(1, (w - boxW) / 2);
 
-    blockingInput();
+    InputModeGuard inputGuard(1);
 
     while (true) {
         draw();
@@ -1237,19 +1334,43 @@ bool confirmQuit() {
         int result = get_wch(&ch);
         if (result == ERR) continue;
 
+        if (result == KEY_CODE_YES && ch == KEY_MOUSE) {
+            MEVENT event;
+            if (getmouse(&event) == OK &&
+                (event.bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED))) {
+                if (event.y == y + 3) {
+                    if (event.x >= x + 3 && event.x <= x + 18) {
+                        saveFile();
+                        return true;
+                    }
+
+                    if (event.x >= x + 21 && event.x <= x + 27)
+                        return true;
+
+                    if (event.x >= x + 30) {
+                        setStatus(L"quit cancelled");
+                        return false;
+                    }
+                } else if (event.y <= y || event.y >= y + boxH - 1 ||
+                           event.x <= x || event.x >= x + boxW - 1) {
+                    setStatus(L"quit cancelled");
+                    return false;
+                }
+            }
+
+            continue;
+        }
+
         if (ch == L's' || ch == L'S') {
             saveFile();
-            liveInput();
             return true;
         }
 
         if (ch == L'q' || ch == L'Q') {
-            liveInput();
             return true;
         }
 
         if (ch == 27) {
-            liveInput();
             setStatus(L"quit cancelled");
             return false;
         }
@@ -1268,6 +1389,7 @@ bool handleSpecialKey(wint_t key) {
     else if (key == KEY_PPAGE) pageUp();
     else if (key == KEY_NPAGE) pageDown();
     else if (key == KEY_F(1)) showHelp();
+    else if (key == KEY_MOUSE) handleMouse();
     else return false;
 
     return true;

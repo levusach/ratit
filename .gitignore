@@ -1,0 +1,6 @@
+ratit
+*.o
+*.pkg.tar.*
+pkg/
+src/
+

@@ -35,6 +35,7 @@ int cx = 0, cy = 0, rowoff = 0, coloff = 0;
 int tabWidth = 4;
 bool dirty = false;
 bool showRat = true;
+bool mouseEnabled = true;
 bool selecting = false;
 int selAnchorX = 0, selAnchorY = 0;
 bool cursesStarted = false;
@@ -146,6 +147,11 @@ void blockingInput() {
     timeout(-1);
 }
 
+void applyMouseMode() {
+    mmask_t mask = mouseEnabled ? (ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION) : 0;
+    mousemask(mask, nullptr);
+}
+
 struct InputModeGuard {
     int cursor;
     bool liveOnExit;
@@ -208,6 +214,12 @@ void redoEdit() {
     setStatus(L"redo");
 }
 
+void toggleMouse() {
+    mouseEnabled = !mouseEnabled;
+    applyMouseMode();
+    setStatus(mouseEnabled ? L"mouse on" : L"mouse off");
+}
+
 void loadSettings() {
     const char* home = std::getenv("HOME");
     if (!home) return;
@@ -227,6 +239,8 @@ void loadSettings() {
             catch (...) {}
         } else if (key == "show_rat") {
             showRat = value != "0" && value != "false";
+        } else if (key == "mouse") {
+            mouseEnabled = value != "0" && value != "false";
         }
     }
 }
@@ -242,7 +256,7 @@ void initCurses() {
     timeout(liveInputDelayMs);
     curs_set(1);
     mouseinterval(0);
-    mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, nullptr);
+    applyMouseMode();
 
     start_color();
     use_default_colors();
@@ -905,6 +919,9 @@ std::vector<std::wstring> ratMood() {
     if (!searchQuery.empty())
         return {L"  (\\_/)", L"  (?.?)", L"  / > search"};
 
+    if (!mouseEnabled)
+        return {L"  (\\_/)", L"  (-.-)", L"  / > keys"};
+
     return {L"  (\\_/)", L"  (o.o)", L"  / > editing"};
 }
 
@@ -1247,6 +1264,7 @@ void showHelp() {
         L"",
         L"Other",
         L"  Ctrl+R show/hide rat",
+        L"  Alt+M toggle mouse",
         L"  Esc close this help"
     };
 
@@ -1411,8 +1429,12 @@ void handleAltKey() {
 
     timeout(liveInputDelayMs);
 
-    if (nextResult != ERR && (next == L's' || next == L'S'))
+    if (nextResult == ERR) return;
+
+    if (next == L's' || next == L'S')
         toggleSelection();
+    else if (next == L'm' || next == L'M')
+        toggleMouse();
 }
 
 bool handleTextKey(wint_t key) {

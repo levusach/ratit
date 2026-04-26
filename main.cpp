@@ -14,6 +14,7 @@
 #include <deque>
 #include <cstdlib>
 #include <array>
+#include <limits>
 
 namespace fs = std::filesystem;
 
@@ -129,6 +130,10 @@ std::string toUtf8(const std::wstring& s) {
 
 void setStatus(const std::wstring& message) {
     statusMessage = message;
+}
+
+int textSize(const std::wstring& text) {
+    return (int)std::min(text.size(), (size_t)std::numeric_limits<int>::max());
 }
 
 void liveInput() {
@@ -265,7 +270,7 @@ void loadFile() {
     if (lines.empty()) lines.push_back(L"");
 
     cy = std::min(cy, (int)lines.size() - 1);
-    cx = std::min(cx, (int)lines[cy].size());
+    cx = std::min(cx, textSize(lines[cy]));
 
     if (fs::exists(filename))
         lastWrite = fs::last_write_time(filename);
@@ -634,7 +639,7 @@ void gotoLine() {
         int line = std::stoi(input);
         line = std::clamp(line, 1, (int)lines.size());
         cy = line - 1;
-        cx = std::min(cx, (int)lines[cy].size());
+        cx = std::min(cx, textSize(lines[cy]));
         setStatus(L"jumped");
     } catch (...) {
         setStatus(L"bad line number");
@@ -694,8 +699,8 @@ void selectionBounds(int& startY, int& startX, int& endY, int& endX) {
 
     startY = std::clamp(startY, 0, (int)lines.size() - 1);
     endY = std::clamp(endY, 0, (int)lines.size() - 1);
-    startX = std::clamp(startX, 0, (int)lines[startY].size());
-    endX = std::clamp(endX, 0, (int)lines[endY].size());
+    startX = std::clamp(startX, 0, textSize(lines[startY]));
+    endX = std::clamp(endX, 0, textSize(lines[endY]));
 }
 
 bool selectedColumnsForLine(int lineIndex, int& startCol, int& endCol) {
@@ -706,7 +711,7 @@ bool selectedColumnsForLine(int lineIndex, int& startCol, int& endCol) {
 
     if (lineIndex < startY || lineIndex > endY) return false;
 
-    int lineLen = (int)lines[lineIndex].size();
+    int lineLen = textSize(lines[lineIndex]);
     startCol = lineIndex == startY ? startX : 0;
     endCol = lineIndex == endY ? endX : lineLen;
 
@@ -724,7 +729,7 @@ std::wstring selectedText() {
 
     std::wstring selected;
     for (int y = startY; y <= endY; ++y) {
-        int lineLen = (int)lines[y].size();
+        int lineLen = textSize(lines[y]);
         int from = y == startY ? std::clamp(startX, 0, lineLen) : 0;
         int to = y == endY ? std::clamp(endX, 0, lineLen) : lineLen;
 
@@ -788,14 +793,14 @@ void insertText(const std::wstring& text, bool remember = true) {
     lines[cy] += parts[0];
 
     if (parts.size() == 1) {
-        cx += parts[0].size();
+        cx += textSize(parts[0]);
     } else {
         int insertAt = cy + 1;
         for (size_t i = 1; i < parts.size(); ++i)
             lines.insert(lines.begin() + insertAt++, parts[i]);
 
         cy += (int)parts.size() - 1;
-        cx = parts.back().size();
+        cx = textSize(parts.back());
         lines[cy] += tail;
     }
 
@@ -804,7 +809,7 @@ void insertText(const std::wstring& text, bool remember = true) {
 
 void drawSyntaxLine(int y, int x, const std::wstring& line, int horizontalOffset, int maxWidth) {
     int i = horizontalOffset;
-    int visibleEnd = std::min((int)line.size(), horizontalOffset + maxWidth);
+    int visibleEnd = std::min(textSize(line), horizontalOffset + maxWidth);
     bool py = isPython();
     bool cpp = isCpp();
 
@@ -823,7 +828,7 @@ void drawSyntaxLine(int y, int x, const std::wstring& line, int horizontalOffset
     };
 
     while (i < visibleEnd) {
-        if (cpp && i + 1 < (int)line.size() && line[i] == L'/' && line[i + 1] == L'/') {
+        if (cpp && i + 1 < textSize(line) && line[i] == L'/' && line[i + 1] == L'/') {
             drawToken(i, visibleEnd, C_COMMENT);
             return;
         }
@@ -837,7 +842,7 @@ void drawSyntaxLine(int y, int x, const std::wstring& line, int horizontalOffset
             wchar_t quote = line[i];
             int start = i++;
 
-            while (i < (int)line.size()) {
+            while (i < textSize(line)) {
                 if (line[i] == L'\\') i += 2;
                 else if (line[i] == quote) {
                     i++;
@@ -851,7 +856,7 @@ void drawSyntaxLine(int y, int x, const std::wstring& line, int horizontalOffset
 
         if (iswdigit(line[i])) {
             int start = i;
-            while (i < (int)line.size() && (iswalnum(line[i]) || line[i] == L'.')) i++;
+            while (i < textSize(line) && (iswalnum(line[i]) || line[i] == L'.')) i++;
 
             drawToken(start, i, C_NUMBER);
             continue;
@@ -859,7 +864,7 @@ void drawSyntaxLine(int y, int x, const std::wstring& line, int horizontalOffset
 
         if (isWordChar(line[i])) {
             int start = i;
-            while (i < (int)line.size() && isWordChar(line[i])) i++;
+            while (i < textSize(line) && isWordChar(line[i])) i++;
 
             std::wstring word = line.substr(start, i - start);
             bool keyword = cppKeywords.count(word) || pyKeywords.count(word);
@@ -1001,6 +1006,9 @@ void backspace() {
         return;
     }
 
+    if (cx == 0 && cy == 0)
+        return;
+
     rememberUndo();
 
     if (cx > 0) {
@@ -1008,7 +1016,7 @@ void backspace() {
         cx--;
         dirty = true;
     } else if (cy > 0) {
-        cx = lines[cy - 1].size();
+        cx = textSize(lines[cy - 1]);
         lines[cy - 1] += lines[cy];
         lines.erase(lines.begin() + cy);
         cy--;
@@ -1023,12 +1031,12 @@ void deleteForward() {
         return;
     }
 
-    if (cx >= (int)lines[cy].size() && cy + 1 >= (int)lines.size())
+    if (cx >= textSize(lines[cy]) && cy + 1 >= (int)lines.size())
         return;
 
     rememberUndo();
 
-    if (cx < (int)lines[cy].size()) {
+    if (cx < textSize(lines[cy])) {
         lines[cy].erase(lines[cy].begin() + cx);
     } else {
         lines[cy] += lines[cy + 1];
@@ -1053,7 +1061,7 @@ void newLine() {
     lines[cy].erase(cx);
     lines.insert(lines.begin() + cy + 1, indent + right);
     cy++;
-    cx = indent.size();
+    cx = textSize(indent);
     dirty = true;
     setStatus(L"new line");
 }
@@ -1083,9 +1091,9 @@ void cutLine() {
     lines.erase(lines.begin() + cy);
 
     if (lines.empty()) lines.push_back(L"");
-    if (cy >= (int)lines.size()) cy = lines.size() - 1;
+    if (cy >= (int)lines.size()) cy = (int)lines.size() - 1;
 
-    cx = std::min(cx, (int)lines[cy].size());
+    cx = std::min(cx, textSize(lines[cy]));
     dirty = true;
     setStatus(L"cut line");
 }
@@ -1115,12 +1123,12 @@ void moveLeft() {
     if (cx > 0) cx--;
     else if (cy > 0) {
         cy--;
-        cx = lines[cy].size();
+        cx = textSize(lines[cy]);
     }
 }
 
 void moveRight() {
-    if (cx < (int)lines[cy].size()) cx++;
+    if (cx < textSize(lines[cy])) cx++;
     else if (cy + 1 < (int)lines.size()) {
         cy++;
         cx = 0;
@@ -1129,17 +1137,17 @@ void moveRight() {
 
 void moveUp() {
     if (cy > 0) cy--;
-    cx = std::min(cx, (int)lines[cy].size());
+    cx = std::min(cx, textSize(lines[cy]));
 }
 
 void moveDown() {
     if (cy + 1 < (int)lines.size()) cy++;
-    cx = std::min(cx, (int)lines[cy].size());
+    cx = std::min(cx, textSize(lines[cy]));
 }
 
 void moveHome() {
     int firstText = 0;
-    while (firstText < (int)lines[cy].size() &&
+    while (firstText < textSize(lines[cy]) &&
            (lines[cy][firstText] == L' ' || lines[cy][firstText] == L'\t')) {
         firstText++;
     }
@@ -1148,7 +1156,7 @@ void moveHome() {
 }
 
 void moveEnd() {
-    cx = lines[cy].size();
+    cx = textSize(lines[cy]);
 }
 
 void pageUp() {
@@ -1158,7 +1166,7 @@ void pageUp() {
 
     int step = std::max(1, h - 5);
     cy = std::max(0, cy - step);
-    cx = std::min(cx, (int)lines[cy].size());
+    cx = std::min(cx, textSize(lines[cy]));
 }
 
 void pageDown() {
@@ -1168,7 +1176,7 @@ void pageDown() {
 
     int step = std::max(1, h - 5);
     cy = std::min((int)lines.size() - 1, cy + step);
-    cx = std::min(cx, (int)lines[cy].size());
+    cx = std::min(cx, textSize(lines[cy]));
 }
 
 void moveToScreenPoint(int screenY, int screenX) {
@@ -1185,7 +1193,7 @@ void moveToScreenPoint(int screenY, int screenX) {
         return;
 
     cy = targetLine;
-    cx = std::clamp(coloff + screenX - editorLeft, 0, (int)lines[cy].size());
+    cx = std::clamp(coloff + screenX - editorLeft, 0, textSize(lines[cy]));
     clearSelection();
 }
 
